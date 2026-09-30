@@ -973,6 +973,8 @@ func _collect_ui_descendants(node: Node, parent_id: String) -> void:
 	if node is Control:
 		_collect_control(node as Control, parent_id)
 		return
+	if node is Viewport:
+		return  # separate render space (Window, SubViewport): its Controls have their own coordinate system
 	for child in node.get_children():
 		_collect_ui_descendants(child, parent_id)
 
