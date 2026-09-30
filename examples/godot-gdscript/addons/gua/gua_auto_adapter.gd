@@ -891,8 +891,19 @@ func _collect_control(control: Control, parent_id: String) -> void:
 		_collect_tab_items(control as TabContainer, id)
 
 	for child in control.get_children():
-		if child is Control:
-			_collect_control(child as Control, id)
+		_collect_ui_descendants(child, id)
+
+
+## Descends through non-Control containers (CanvasLayer, Node2D, Window, plain
+## Node) so Controls nested under them still register, flattened onto the
+## nearest Control ancestor's id. Canvas-layer transforms are already folded
+## into Control.global_position, so bounds stay correct.
+func _collect_ui_descendants(node: Node, parent_id: String) -> void:
+	if node is Control:
+		_collect_control(node as Control, parent_id)
+		return
+	for child in node.get_children():
+		_collect_ui_descendants(child, parent_id)
 
 
 func _collect_item_list_items(item_list: ItemList, parent_id: String) -> void:

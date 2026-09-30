@@ -8,6 +8,7 @@ var expected_click_request_id := 0
 var click_completed_before_handler := false
 var smoke_root: Control
 var finishing := false
+var hud_pressed := 0
 var observed_wheel_buttons: Array[int] = []
 var observed_shift_locations: Array[int] = []
 var observed_pointer_button_positions: Array[Vector2] = []
@@ -133,6 +134,24 @@ func _run() -> void:
 	scroll_content.custom_minimum_size = Vector2(1000, 1000)
 	scroll.add_child(scroll_content)
 	screen.add_child(scroll)
+
+	# Controls nested under non-Control containers (CanvasLayer, plain Node)
+	# must still register -- the collector walks the full scene subtree.
+	var hud_layer := CanvasLayer.new()
+	hud_layer.name = "HudLayer"
+	screen.add_child(hud_layer)
+	var hud_button := Button.new()
+	hud_button.name = "hud_pause"
+	hud_button.text = "Pause"
+	hud_button.pressed.connect(func(): hud_pressed += 1)
+	hud_layer.add_child(hud_button)
+	var hud_node := Node.new()
+	hud_node.name = "HudNest"
+	hud_layer.add_child(hud_node)
+	var hud_nested := Button.new()
+	hud_nested.name = "hud_nested"
+	hud_nested.text = "Nested"
+	hud_node.add_child(hud_nested)
 
 	await get_tree().process_frame
 	var extension := load("res://addons/gua/gua.gdextension")
@@ -461,6 +480,13 @@ func _run() -> void:
 	if not tree_json.contains("servers$item:0") or not tree_json.contains("tabs$tab:1"):
 		_fail("Gua smoke did not publish stable ItemList/TabContainer semantic children: %s" % tree_json)
 		return
+	var layered_button = _find_node(tree, "HudLayer/hud_pause")
+	var nested_button = _find_node(tree, "HudLayer/HudNest/hud_nested")
+	if (layered_button == null or layered_button.get("role", "") != "button"
+			or layered_button.get("parentId", "?") != "root"
+			or nested_button == null or nested_button.get("role", "") != "button"):
+		_fail("Gua did not collect Controls nested under non-Control containers: %s" % tree_json)
+		return
 	var player_tree = JSON.parse_string(ui.get_player_ui_tree_json())
 	var player_list_item = _find_node(player_tree, "servers$item:1")
 	var player_tab_item = _find_node(player_tree, "tabs$tab:0")
@@ -578,6 +604,7 @@ func _run() -> void:
 		[{"action": "set_value", "node_id": "volume", "value": "42"}, func(): return slider.value == 42],
 		[{"action": "set_value", "node_id": "limit", "value": "12"}, func(): return spin_box.value == 12],
 		[{"action": "set_checked", "node_id": "action_check", "bool_value": true}, func(): return action_checkbox.button_pressed],
+		[{"action": "click", "node_id": "HudLayer/hud_pause"}, func(): return hud_pressed == 1],
 		[{"action": "select", "node_id": "difficulty", "value": "Easy"}, func(): return option.selected == 0],
 		[{"action": "select", "node_id": "servers", "value": "Osaka"}, func(): return item_list.is_selected(1)],
 		[{"action": "select", "node_id": "tabs", "value": "General"}, func(): return tabs.current_tab == 0],
