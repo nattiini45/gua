@@ -111,6 +111,11 @@ var raw_input_enabled := false
 var semantic_input_enabled := false
 var player_semantic_input_allowed := false
 var player_raw_input_allowed := false
+## When true, _publish_world_frame also registers every Node2D/Node3D under
+## root that is not already group-tagged -- ids synthesize from the node path
+## ("auto:<path>"). Group-tagged nodes keep their meta-driven descriptors and
+## become parents for auto descendants.
+var auto_expose_world_objects := false
 var last_game_input_ticks_ms := Time.get_ticks_msec()
 var disposed := false
 var observe_owners: Array[WeakRef] = []
@@ -373,8 +378,53 @@ func _publish_world_frame(scene: String, report_errors: bool = true) -> void:
 	_sample_observations(false)
 	if disposed or context == null:
 		return
+	if auto_expose_world_objects:
+		_auto_publish_world_descendants(root, "")
 	if not context.end_world_frame():
 		_report_world_frame_error("Gua world frame was rejected", report_errors)
+
+
+## Best-effort spatial walk for auto_expose_world_objects: every Node2D/Node3D
+## under root that is not already group-tagged registers with an "auto:<path>"
+## id, parented to the nearest published ancestor. Registration failures are
+## ignored -- optional data must not abort the frame.
+func _auto_publish_world_descendants(node: Node, parent_id: String) -> void:
+	var pid := parent_id
+	if node is Node2D or node is Node3D:
+		if node.is_in_group(&"gua_world_object") and node.has_meta(&"gua_world_id"):
+			pid = str(node.get_meta(&"gua_world_id", ""))
+		else:
+			var object_id := "auto:" + str(root.get_path_to(node))
+			var position := Vector3.ZERO
+			var space := "world2d"
+			if node is Node3D:
+				position = (node as Node3D).global_position
+				space = "world3d"
+			else:
+				var position_2d := (node as Node2D).global_position
+				position = Vector3(position_2d.x, position_2d.y, 0.0)
+			pid = object_id
+			context.register_world_object({
+				"id": object_id,
+				"parent_id": parent_id,
+				"kind": str(node.get_meta(&"gua_world_kind", "object")),
+				"label": str(node.get_meta(&"gua_world_label", node.name)),
+				"description": str(node.get_meta(&"gua_world_description", "")),
+				"space": space,
+				"position": position,
+				"visible_to_player": bool(node.get_meta(&"gua_world_visible_to_player", false)),
+				"active": bool(node.get_meta(&"gua_world_active", true)),
+				"agent_exposure": str(node.get_meta(&"gua_agent_exposure", node.get_meta(&"gua_world_agent_exposure", "auto"))),
+				"agent_field_rules": node.get_meta(&"gua_agent_field_rules", node.get_meta(&"gua_world_agent_field_rules", [])),
+				"agent_allowed_actions": node.get_meta(&"gua_agent_allowed_actions", node.get_meta(&"gua_world_agent_allowed_actions", [])),
+				"agent_allowed_actions_set": node.has_meta(&"gua_agent_allowed_actions") or node.has_meta(&"gua_world_agent_allowed_actions"),
+				"tags": node.get_meta(&"gua_world_tags", []),
+				"state": node.get_meta(&"gua_world_state", {}),
+				"domain_id": str(node.get_meta(&"gua_world_domain_id", "")),
+				"related_ui_node_id": str(node.get_meta(&"gua_world_related_ui_node_id", "")),
+			})
+	for child in node.get_children():
+		_auto_publish_world_descendants(child, pid)
 
 
 func _report_world_frame_error(message: String, report_errors: bool) -> void:
