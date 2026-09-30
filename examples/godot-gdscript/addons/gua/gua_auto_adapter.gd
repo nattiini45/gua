@@ -400,52 +400,104 @@ func _publish_world_frame(scene: String, report_errors: bool = true) -> void:
 	if disposed or context == null:
 		return
 	if auto_expose_world_objects:
-		_auto_publish_world_descendants(root, "")
+		var claimed := {}
+		for object_node: Node in objects:
+			claimed[str(object_node.get_meta(&"gua_world_id", ""))] = true
+		_auto_publish_world_descendants(root, "", claimed)
 	if not context.end_world_frame():
 		_report_world_frame_error("Gua world frame was rejected", report_errors)
 
 
 ## Best-effort spatial walk for auto_expose_world_objects: every Node2D/Node3D
 ## under root that is not already group-tagged registers with an "auto:<path>"
-## id, parented to the nearest published ancestor. Registration failures are
-## ignored -- optional data must not abort the frame.
-func _auto_publish_world_descendants(node: Node, parent_id: String) -> void:
+## id, parented to the nearest published ancestor. Descriptors are sanitized to
+## the native frame's validity rules in _auto_world_descriptor -- a malformed
+## auto node is skipped, never allowed to invalidate the whole world frame.
+func _auto_publish_world_descendants(node: Node, parent_id: String, claimed: Dictionary) -> void:
 	var pid := parent_id
 	if node is Node2D or node is Node3D:
 		if node.is_in_group(&"gua_world_object") and node.has_meta(&"gua_world_id"):
 			pid = str(node.get_meta(&"gua_world_id", ""))
 		else:
 			var object_id := "auto:" + str(root.get_path_to(node))
-			var position := Vector3.ZERO
-			var space := "world2d"
-			if node is Node3D:
-				position = (node as Node3D).global_position
-				space = "world3d"
-			else:
-				var position_2d := (node as Node2D).global_position
-				position = Vector3(position_2d.x, position_2d.y, 0.0)
-			pid = object_id
-			context.register_world_object({
-				"id": object_id,
-				"parent_id": parent_id,
-				"kind": str(node.get_meta(&"gua_world_kind", "object")),
-				"label": str(node.get_meta(&"gua_world_label", node.name)),
-				"description": str(node.get_meta(&"gua_world_description", "")),
-				"space": space,
-				"position": position,
-				"visible_to_player": bool(node.get_meta(&"gua_world_visible_to_player", false)),
-				"active": bool(node.get_meta(&"gua_world_active", true)),
-				"agent_exposure": str(node.get_meta(&"gua_agent_exposure", node.get_meta(&"gua_world_agent_exposure", "auto"))),
-				"agent_field_rules": node.get_meta(&"gua_agent_field_rules", node.get_meta(&"gua_world_agent_field_rules", [])),
-				"agent_allowed_actions": node.get_meta(&"gua_agent_allowed_actions", node.get_meta(&"gua_world_agent_allowed_actions", [])),
-				"agent_allowed_actions_set": node.has_meta(&"gua_agent_allowed_actions") or node.has_meta(&"gua_world_agent_allowed_actions"),
-				"tags": node.get_meta(&"gua_world_tags", []),
-				"state": node.get_meta(&"gua_world_state", {}),
-				"domain_id": str(node.get_meta(&"gua_world_domain_id", "")),
-				"related_ui_node_id": str(node.get_meta(&"gua_world_related_ui_node_id", "")),
-			})
+			var descriptor = _auto_world_descriptor(node, object_id, parent_id)
+			if descriptor != null and not claimed.has(object_id):
+				context.register_world_object(descriptor)
+				claimed[object_id] = true
+				pid = object_id
 	for child in node.get_children():
-		_auto_publish_world_descendants(child, pid)
+		_auto_publish_world_descendants(child, pid, claimed)
+
+
+## Builds a schema-valid descriptor for an auto-exposed node, or null when the
+## node's own data is unusable (non-finite position). Wrong-typed metas fall
+## back to defaults instead of reaching the native validator, which poisons
+## the staged frame on ANY invalid descriptor.
+func _auto_world_descriptor(node: Node, object_id: String, parent_id: String) -> Variant:
+	var position := Vector3.ZERO
+	var space := "world2d"
+	if node is Node3D:
+		position = (node as Node3D).global_position
+		space = "world3d"
+	else:
+		var position_2d := (node as Node2D).global_position
+		position = Vector3(position_2d.x, position_2d.y, 0.0)
+	if not (is_finite(position.x) and is_finite(position.y) and is_finite(position.z)):
+		return null
+	var kind := str(node.get_meta(&"gua_world_kind", "object"))
+	if not _is_valid_world_kind(kind):
+		kind = "object"
+	var visible_meta = node.get_meta(&"gua_world_visible_to_player", false)
+	var active_meta = node.get_meta(&"gua_world_active", true)
+	var exposure := str(node.get_meta(&"gua_agent_exposure", node.get_meta(&"gua_world_agent_exposure", "auto")))
+	if exposure != "private":
+		exposure = "auto"
+	var tags: Array = []
+	var raw_tags = node.get_meta(&"gua_world_tags", [])
+	if raw_tags is Array:
+		for tag in raw_tags:
+			var tag_string := str(tag)
+			if not tag_string.is_empty() and not tags.has(tag_string):
+				tags.append(tag_string)
+	var state := {}
+	var raw_state = node.get_meta(&"gua_world_state", {})
+	if raw_state is Dictionary:
+		for key in raw_state:
+			var value = raw_state[key]
+			if value == null or value is bool or value is int or value is String or (value is float and is_finite(value)):
+				state[str(key)] = value
+	return {
+		"id": object_id,
+		"parent_id": parent_id,
+		"kind": kind,
+		"label": str(node.get_meta(&"gua_world_label", node.name)),
+		"description": str(node.get_meta(&"gua_world_description", "")),
+		"space": space,
+		"position": position,
+		"visible_to_player": visible_meta if typeof(visible_meta) == TYPE_BOOL else false,
+		"active": active_meta if typeof(active_meta) == TYPE_BOOL else true,
+		"agent_exposure": exposure,
+		"agent_field_rules": node.get_meta(&"gua_agent_field_rules", node.get_meta(&"gua_world_agent_field_rules", [])),
+		"agent_allowed_actions": node.get_meta(&"gua_agent_allowed_actions", node.get_meta(&"gua_world_agent_allowed_actions", [])),
+		"agent_allowed_actions_set": node.has_meta(&"gua_agent_allowed_actions") or node.has_meta(&"gua_world_agent_allowed_actions"),
+		"tags": tags,
+		"state": state,
+		"domain_id": str(node.get_meta(&"gua_world_domain_id", "")),
+		"related_ui_node_id": str(node.get_meta(&"gua_world_related_ui_node_id", "")),
+	}
+
+
+## Mirrors the native kind validator (lowercase alnum + _-.): auto-exposed
+## nodes whose gua_world_kind meta is malformed fall back to "object" instead
+## of invalidating the staged world frame.
+func _is_valid_world_kind(kind: String) -> bool:
+	if kind.is_empty() or kind.unicode_at(0) < 97 or kind.unicode_at(0) > 122:
+		return false
+	for i in range(1, kind.length()):
+		var c := kind.unicode_at(i)
+		if not ((c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95 or c == 45 or c == 46):
+			return false
+	return true
 
 
 func _report_world_frame_error(message: String, report_errors: bool) -> void:

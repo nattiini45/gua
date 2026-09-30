@@ -237,6 +237,13 @@ func _run() -> void:
 	auto_shard.name = "AutoShard"
 	auto_shard.position = Vector2(50, 60)
 	screen.add_child(auto_shard)
+	# Wrong-typed metas must be sanitized, not invalidate the staged frame.
+	var bad_prop := Node2D.new()
+	bad_prop.name = "BadProp"
+	bad_prop.position = Vector2(70, 80)
+	bad_prop.set_meta(&"gua_world_kind", "BAD KIND")
+	bad_prop.set_meta(&"gua_world_visible_to_player", "false")
+	screen.add_child(bad_prop)
 
 	ui.attach(screen)
 	if ui.get_game_input_capabilities(1) != 0:
@@ -431,10 +438,15 @@ func _run() -> void:
 	ui._publish_world_frame("title", false)
 	var auto_world_tree = JSON.parse_string(ui.context.get_world_object_tree_json())
 	var auto_shard_object = _find_world_object(auto_world_tree, "auto:AutoShard")
+	var auto_bad_object = _find_world_object(auto_world_tree, "auto:BadProp")
 	ui.auto_expose_world_objects = false
-	if auto_shard_object == null or str(auto_shard_object.get("parentId", "?")) != "" \
-			or float(auto_shard_object.get("position", {}).get("x", -1)) != 50.0:
+	if (auto_shard_object == null or auto_shard_object.has("parentId")
+			or float(auto_shard_object.get("position", {}).get("x", -1)) != 50.0):
 		_fail("Gua auto_expose_world_objects did not publish the untagged Node2D: %s" % auto_world_tree)
+		return
+	if (auto_bad_object == null or auto_bad_object.get("kind", "") != "object"
+			or auto_bad_object.get("visibleToPlayer", true) != false):
+		_fail("Gua auto_expose_world_objects did not sanitize wrong-typed metas: %s" % auto_world_tree)
 		return
 	door.set_meta(&"gua_world_visible_to_player", "false")
 	ui._publish_world_frame("title", false)
