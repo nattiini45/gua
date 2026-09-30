@@ -116,6 +116,12 @@ var player_raw_input_allowed := false
 ## ("auto:<path>"). Group-tagged nodes keep their meta-driven descriptors and
 ## become parents for auto descendants.
 var auto_expose_world_objects := false
+## Seconds between automatic viewport screenshot publishes so bridge clients
+## (e.g. gui-mcp get_screenshot, which reads the latest stored frame rather
+## than requesting a capture) receive pixels. 0 disables -- request-driven
+## capture via consume_screenshot_request is unaffected.
+var screenshot_publish_interval := 0.0
+var _last_auto_screenshot_ms := 0
 var last_game_input_ticks_ms := Time.get_ticks_msec()
 var disposed := false
 var observe_owners: Array[WeakRef] = []
@@ -275,6 +281,21 @@ func update(screen: String) -> void:
 	_dispatch_action_requests()
 	_dispatch_game_input_requests()
 	_schedule_screenshot_capture()
+	if (screenshot_publish_interval > 0.0
+			and DisplayServer.get_name() != "headless"
+			and ticks_ms - _last_auto_screenshot_ms >= int(screenshot_publish_interval * 1000.0)):
+		_last_auto_screenshot_ms = ticks_ms
+		_auto_screenshot()
+
+
+## Deferred screenshot for the auto-publish path -- the viewport texture is
+## only safe to read after RenderingServer.frame_post_draw, same as the
+## request-driven capture in _capture_requested_screenshot.
+func _auto_screenshot() -> void:
+	await RenderingServer.frame_post_draw
+	if disposed or context == null or not is_instance_valid(root):
+		return
+	capture_viewport_screenshot()
 
 
 func configure_game_input_actions(input_context: String, actions: Array[Dictionary], allow_player_agents := false) -> bool:
